@@ -5,7 +5,7 @@ final class DropdownPanel: NSPanel {
     private let hiddenItems: [MenuBarItem]
     private let alwaysHiddenItems: [MenuBarItem]
     private let iceIconFrame: CGRect
-    private let screen: NSScreen
+    private let targetScreen: NSScreen
     private weak var manager: MenuBarManager?
     private weak var appState: AppState?
 
@@ -20,7 +20,7 @@ final class DropdownPanel: NSPanel {
         self.hiddenItems = hiddenItems
         self.alwaysHiddenItems = alwaysHiddenItems
         self.iceIconFrame = iceIconFrame
-        self.screen = screen
+        self.targetScreen = screen
         self.manager = manager
         self.appState = appState
 
@@ -63,7 +63,7 @@ final class DropdownPanel: NSPanel {
         let panelHeight = max(40, size.height + 16)
 
         // Position below the ice icon (convert from AppKit coordinates)
-        let screenHeight = screen.frame.height
+        let screenHeight = targetScreen.frame.height
         let menuBarBottom = screenHeight - iceIconFrame.maxY
         let panelX = iceIconFrame.midX - panelWidth / 2
         let panelY = menuBarBottom - panelHeight - 4

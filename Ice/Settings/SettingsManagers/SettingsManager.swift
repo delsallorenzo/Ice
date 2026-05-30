@@ -1,4 +1,5 @@
 import Combine
+import Foundation
 
 enum DisplayMode: String, CaseIterable {
     case iconOnly = "Icon Only"

@@ -46,7 +46,7 @@ struct DropdownView: View {
                 itemRow(item, isAlwaysHidden: isAlwaysHidden)
             }
         }
-        .onDrop(of: [.text], delegate: DropDelegate(
+        .onDrop(of: [.text], delegate: ItemDropDelegate(
             isAlwaysHiddenTarget: isAlwaysHidden,
             draggingItem: $draggingItem,
             onMove: onItemMove
@@ -117,7 +117,7 @@ struct HoverEffectModifier: ViewModifier {
 
 // MARK: - Drop delegate
 
-struct DropDelegate: DropDelegate {
+struct ItemDropDelegate: DropDelegate {
     let isAlwaysHiddenTarget: Bool
     @Binding var draggingItem: MenuBarItem?
     let onMove: (MenuBarItem, Bool) -> Void
