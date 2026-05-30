@@ -194,13 +194,13 @@ final class MenuBarManager: ObservableObject {
     // MARK: - Context menu
 
     private func showContextMenu() {
-        let menu = NSMenu(title: "Ice")
+        let menu = NSMenu(title: "Hide Menu Bar Apps")
         let prefsItem = NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
         prefsItem.keyEquivalentModifierMask = .command
         prefsItem.target = self
         menu.addItem(prefsItem)
         menu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Quit Ice", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
         quitItem.keyEquivalentModifierMask = .command
         menu.addItem(quitItem)
 

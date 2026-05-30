@@ -20,7 +20,7 @@ final class PreferencesWindowController: NSWindowController {
         let view = PreferencesView().environmentObject(appState.settingsManager)
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.title = "Ice Preferences"
+        window.title = "Hide Menu Bar Apps — Preferences"
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.setContentSize(hosting.view.fittingSize)
         window.center()

@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(state.permissionsManager)
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.title = "Ice — Permissions"
+        window.title = "Hide Menu Bar Apps — Permissions"
         window.styleMask = [.titled, .closable]
         window.setContentSize(hosting.view.fittingSize)
         window.center()
