@@ -1,420 +1,236 @@
-//
-//  MenuBarManager.swift
-//  Ice
-//
-
-import AXSwift
+import Cocoa
 import Combine
-import SwiftUI
 
-/// Manager for the state of the menu bar.
 @MainActor
 final class MenuBarManager: ObservableObject {
-    /// Information for the menu bar's average color.
-    @Published private(set) var averageColorInfo: MenuBarAverageColorInfo?
+    let visibleSection: MenuBarSection
+    let hiddenSection: MenuBarSection
+    let alwaysHiddenSection: MenuBarSection
 
-    /// A Boolean value that indicates whether the menu bar is either always hidden
-    /// by the system, or automatically hidden and shown by the system based on the
-    /// location of the mouse.
-    @Published private(set) var isMenuBarHiddenBySystem = false
+    @Published private(set) var isPanelOpen = false
 
-    /// A Boolean value that indicates whether the menu bar is hidden by the system
-    /// according to a value stored in UserDefaults.
-    @Published private(set) var isMenuBarHiddenBySystemUserDefaults = false
-
-    /// The shared app state.
-    private weak var appState: AppState?
-
-    /// Storage for internal observers.
+    weak var appState: AppState?
+    private var dropdownPanel: DropdownPanel?
     private var cancellables = Set<AnyCancellable>()
 
-    /// A Boolean value that indicates whether the application menus are hidden.
-    private var isHidingApplicationMenus = false
+    var sections: [MenuBarSection] { [visibleSection, hiddenSection, alwaysHiddenSection] }
 
-    /// The managed sections in the menu bar.
-    private(set) var sections = [MenuBarSection]()
-
-    /// The panel that contains the Ice Bar interface.
-    let iceBarPanel: IceBarPanel
-
-    /// The panel that contains the menu bar search interface.
-    let searchPanel: MenuBarSearchPanel
-
-    /// A Boolean value that indicates whether the manager can update its stored
-    /// information for the menu bar's average color.
-    private var canUpdateAverageColorInfo: Bool {
-        appState?.settingsWindow?.isVisible == true
+    init() {
+        self.visibleSection = MenuBarSection(name: .visible)
+        self.hiddenSection = MenuBarSection(name: .hidden)
+        self.alwaysHiddenSection = MenuBarSection(name: .alwaysHidden)
     }
 
-    /// Initializes a new menu bar manager instance.
-    init(appState: AppState) {
-        self.iceBarPanel = IceBarPanel(appState: appState)
-        self.searchPanel = MenuBarSearchPanel(appState: appState)
-        self.appState = appState
-    }
-
-    /// Performs the initial setup of the menu bar manager.
     func performSetup() {
-        initializeSections()
-        configureCancellables()
-        iceBarPanel.performSetup()
-    }
+        visibleSection.controlItem.configureButton(target: self, action: #selector(handleClick))
 
-    /// Performs the initial setup of the menu bar manager's sections.
-    private func initializeSections() {
-        // Make sure initialization can only happen once.
-        guard sections.isEmpty else {
-            Logger.menuBarManager.warning("Sections already initialized")
-            return
-        }
-
-        guard let appState else {
-            Logger.menuBarManager.error("Error initializing menu bar sections: Missing app state")
-            return
-        }
-
-        sections = [
-            MenuBarSection(name: .visible, appState: appState),
-            MenuBarSection(name: .hidden, appState: appState),
-            MenuBarSection(name: .alwaysHidden, appState: appState),
-        ]
-    }
-
-    /// Configures the internal observers for the manager.
-    private func configureCancellables() {
-        var c = Set<AnyCancellable>()
-
-        NSApp.publisher(for: \.currentSystemPresentationOptions)
+        guard let appState else { return }
+        appState.settingsManager.$enableAlwaysHidden
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] options in
-                guard let self else {
-                    return
-                }
-                let hidden = options.contains(.hideMenuBar) || options.contains(.autoHideMenuBar)
-                isMenuBarHiddenBySystem = hidden
+            .sink { [weak self] enabled in
+                self?.alwaysHiddenSection.controlItem.isVisible = enabled
             }
-            .store(in: &c)
-
-        if
-            let hiddenSection = section(withName: .alwaysHidden),
-            let window = hiddenSection.controlItem.window
-        {
-            window.publisher(for: \.frame)
-                .map { $0.origin.y }
-                .removeDuplicates()
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in
-                    guard
-                        let self,
-                        let isMenuBarHidden = Defaults.globalDomain["_HIHideMenuBar"] as? Bool
-                    else {
-                        return
-                    }
-                    isMenuBarHiddenBySystemUserDefaults = isMenuBarHidden
-                }
-                .store(in: &c)
-        }
-
-        // Handle the `focusedApp` rehide strategy.
-        NSWorkspace.shared.publisher(for: \.frontmostApplication)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                if
-                    let self,
-                    let appState,
-                    case .focusedApp = appState.settingsManager.generalSettingsManager.rehideStrategy,
-                    let hiddenSection = section(withName: .hidden),
-                    !appState.eventManager.isMouseInsideMenuBar
-                {
-                    Task {
-                        try await Task.sleep(for: .seconds(0.1))
-                        hiddenSection.hide()
-                    }
-                }
-            }
-            .store(in: &c)
-
-        appState?.settingsWindow?.publisher(for: \.isVisible)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.updateAverageColorInfo()
-            }
-            .store(in: &c)
-
-        Timer.publish(every: 5, on: .main, in: .default)
-            .autoconnect()
-            .sink { [weak self] _ in
-                self?.updateAverageColorInfo()
-            }
-            .store(in: &c)
-
-        // Hide application menus when a section is shown (if applicable).
-        Publishers.MergeMany(sections.map { $0.controlItem.$state })
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard
-                    let self,
-                    let appState
-                else {
-                    return
-                }
-
-                // Don't continue if:
-                //   * The "HideApplicationMenus" setting isn't enabled.
-                //   * The menu bar is hidden by the system.
-                //   * The active space is fullscreen.
-                //   * The settings window is visible.
-                guard
-                    appState.settingsManager.advancedSettingsManager.hideApplicationMenus,
-                    !isMenuBarHiddenBySystem,
-                    !appState.isActiveSpaceFullscreen,
-                    appState.settingsWindow?.isVisible == false
-                else {
-                    return
-                }
-
-                if sections.contains(where: { $0.controlItem.state == .showItems }) {
-                    guard let screen = NSScreen.main else {
-                        return
-                    }
-
-                    let displayID = screen.displayID
-
-                    // Get the application menu frame for the display.
-                    guard let applicationMenuFrame = getApplicationMenuFrame(for: displayID) else {
-                        return
-                    }
-
-                    // Get all items.
-                    var items = MenuBarItem.getMenuBarItems(on: displayID, onScreenOnly: false, activeSpaceOnly: true)
-
-                    // Filter the items down according to the currently enabled/shown sections.
-                    if
-                        let alwaysHiddenSection = section(withName: .alwaysHidden),
-                        alwaysHiddenSection.isEnabled
-                    {
-                        if alwaysHiddenSection.controlItem.state == .hideItems {
-                            if let alwaysHiddenControlItem = items.firstIndex(matching: .alwaysHiddenControlItem).map({ items.remove(at: $0) }) {
-                                items.trimPrefix { $0.frame.maxX <= alwaysHiddenControlItem.frame.minX }
-                            }
-                        }
-                    } else {
-                        if let hiddenControlItem = items.firstIndex(matching: .hiddenControlItem).map({ items.remove(at: $0) }) {
-                            items.trimPrefix { $0.frame.maxX <= hiddenControlItem.frame.minX }
-                        }
-                    }
-
-                    // Get the leftmost item on the screen.
-                    guard let leftmostItem = items.min(by: { $0.frame.minX < $1.frame.minX }) else {
-                        return
-                    }
-
-                    // If the minX of the item is less than or equal to the maxX of the
-                    // application menu frame, activate the app to hide the menu.
-                    if leftmostItem.frame.minX <= applicationMenuFrame.maxX {
-                        hideApplicationMenus()
-                    }
-                } else if isHidingApplicationMenus {
-                    showApplicationMenus()
-                }
-            }
-            .store(in: &c)
-
-        cancellables = c
+            .store(in: &cancellables)
     }
 
-    /// Updates the ``averageColorInfo`` property with the current average color
-    /// of the menu bar.
-    func updateAverageColorInfo() {
-        guard
-            canUpdateAverageColorInfo,
-            let screen = appState?.settingsWindow?.screen
-        else {
-            return
-        }
-
-        let image: CGImage?
-        let source: MenuBarAverageColorInfo.Source
-
-        let windows = WindowInfo.getOnScreenWindows(excludeDesktopWindows: false)
-        let displayID = screen.displayID
-
-        if let window = WindowInfo.getMenuBarWindow(from: windows, for: displayID) {
-            var bounds = window.frame
-            bounds.size.height = 1
-            bounds.origin.x = bounds.maxX - (bounds.width / 4)
-            bounds.size.width /= 4
-
-            image = ScreenCapture.captureWindow(window.windowID, screenBounds: bounds, option: .nominalResolution)
-            source = .menuBarWindow
-        } else if let window = WindowInfo.getWallpaperWindow(from: windows, for: displayID) {
-            var bounds = window.frame
-            bounds.size.height = 1
-            bounds.origin.x = bounds.midX
-            bounds.size.width /= 2
-
-            image = ScreenCapture.captureWindow(window.windowID, screenBounds: bounds, option: .nominalResolution)
-            source = .desktopWallpaper
-        } else {
-            return
-        }
-
-        guard
-            let image,
-            let color = image.averageColor(makeOpaque: true)
-        else {
-            return
-        }
-
-        let info = MenuBarAverageColorInfo(color: color, source: source)
-
-        if averageColorInfo != info {
-            averageColorInfo = info
-        }
-    }
-
-    /// Returns a Boolean value that indicates whether the given display
-    /// has a valid menu bar.
-    func hasValidMenuBar(in windows: [WindowInfo], for display: CGDirectDisplayID) -> Bool {
-        guard let menuBarWindow = WindowInfo.getMenuBarWindow(from: windows, for: display) else {
-            return false
-        }
-        let position = menuBarWindow.frame.origin
-        do {
-            let uiElement = try systemWideElement.elementAtPosition(Float(position.x), Float(position.y))
-            return try uiElement?.role() == .menuBar
-        } catch {
-            return false
-        }
-    }
-
-    /// Returns the frame of the application menu for the given display.
-    func getApplicationMenuFrame(for displayID: CGDirectDisplayID) -> CGRect? {
-        let displayBounds = CGDisplayBounds(displayID)
-
-        guard
-            let menuBar = try? systemWideElement.elementAtPosition(Float(displayBounds.origin.x), Float(displayBounds.origin.y)),
-            let role = try? menuBar.role(),
-            role == .menuBar,
-            let items: [UIElement] = try? menuBar.arrayAttribute(.children)?.filter({ (try? $0.attribute(.enabled)) == true })
-        else {
-            return nil
-        }
-
-        let itemFrames = items.lazy.compactMap { try? $0.attribute(.frame) as CGRect? }
-        let applicationMenuFrame = itemFrames.reduce(.null, CGRectUnion)
-
-        if applicationMenuFrame.width <= 0 {
-            return nil
-        }
-
-        // The Accessibility API returns the menu bar for the active screen, regardless of the
-        // display origin used. This workaround prevents an incorrect frame from being returned
-        // for inactive displays in multi-display setups where one display has a notch.
-        if
-            let mainScreen = NSScreen.main,
-            let thisScreen = NSScreen.screens.first(where: { $0.displayID == displayID }),
-            thisScreen != mainScreen,
-            let notchedScreen = NSScreen.screens.first(where: { $0.hasNotch }),
-            let leftArea = notchedScreen.auxiliaryTopLeftArea,
-            applicationMenuFrame.width >= leftArea.maxX
-        {
-            return nil
-        }
-
-        return applicationMenuFrame
-    }
-
-    /// Shows the right-click menu.
-    func showRightClickMenu(at point: CGPoint) {
-        let menu = NSMenu(title: "Ice")
-
-        let editItem = NSMenuItem(
-            title: "Edit Menu Bar Appearance…",
-            action: #selector(showAppearanceEditorPopover),
-            keyEquivalent: ""
-        )
-        editItem.target = self
-        menu.addItem(editItem)
-
-        menu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(
-            title: "Ice Settings…",
-            action: #selector(AppDelegate.openSettingsWindow),
-            keyEquivalent: ","
-        )
-        menu.addItem(settingsItem)
-
-        menu.popUp(positioning: nil, at: point, in: nil)
-    }
-
-    /// Hides the application menus.
-    func hideApplicationMenus() {
-        guard let appState else {
-            Logger.menuBarManager.error("Error hiding application menus: Missing app state")
-            return
-        }
-        Logger.menuBarManager.info("Hiding application menus")
-        appState.activate(withPolicy: .regular)
-        isHidingApplicationMenus = true
-    }
-
-    /// Shows the application menus.
-    func showApplicationMenus() {
-        guard let appState else {
-            Logger.menuBarManager.error("Error showing application menus: Missing app state")
-            return
-        }
-        Logger.menuBarManager.info("Showing application menus")
-        appState.deactivate(withPolicy: .accessory)
-        isHidingApplicationMenus = false
-    }
-
-    /// Toggles the visibility of the application menus.
-    func toggleApplicationMenus() {
-        if isHidingApplicationMenus {
-            showApplicationMenus()
-        } else {
-            hideApplicationMenus()
-        }
-    }
-
-    /// Shows the appearance editor popover, centered under the menu bar.
-    @objc private func showAppearanceEditorPopover() {
-        guard let appState else {
-            Logger.menuBarManager.error("Error showing appearance editor popover: Missing app state")
-            return
-        }
-        let panel = MenuBarAppearanceEditorPanel(appState: appState)
-        panel.orderFrontRegardless()
-        panel.showAppearanceEditorPopover()
-    }
-
-    /// Returns the menu bar section with the given name.
     func section(withName name: MenuBarSection.Name) -> MenuBarSection? {
         sections.first { $0.name == name }
     }
-}
 
-// MARK: MenuBarManager: BindingExposable
-extension MenuBarManager: BindingExposable { }
-
-// MARK: - MenuBarAverageColorInfo
-
-/// Information for the menu bar's average color.
-struct MenuBarAverageColorInfo: Hashable {
-    enum Source: Hashable {
-        case menuBarWindow
-        case desktopWallpaper
+    @objc private func handleClick() {
+        guard let event = NSApp.currentEvent else { return }
+        switch event.type {
+        case .rightMouseUp:
+            showContextMenu()
+        case .leftMouseDown:
+            let isCmdPressed = NSEvent.modifierFlags.contains(.command)
+            if isPanelOpen {
+                closePanel()
+            } else {
+                openPanel(includeAlwaysHidden: isCmdPressed)
+            }
+        default:
+            break
+        }
     }
 
-    var color: CGColor
-    var source: Source
+    // MARK: - Panel open/close
+
+    func openPanel(includeAlwaysHidden: Bool) {
+        guard let appState, let screen = NSScreen.main,
+              let iceIconFrame = visibleSection.controlItem.windowFrame else { return }
+
+        hiddenSection.show()
+        if includeAlwaysHidden { alwaysHiddenSection.show() }
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(200))
+
+            let all = MenuBarItem.getMenuBarItems(onScreenOnly: false, activeSpaceOnly: true)
+
+            guard let hiddenCI = all.first(where: { $0.info == .hiddenControlItem }) else {
+                self.hiddenSection.hide()
+                if includeAlwaysHidden { self.alwaysHiddenSection.hide() }
+                return
+            }
+
+            let alwaysHiddenCI = includeAlwaysHidden
+                ? all.first(where: { $0.info == .alwaysHiddenControlItem })
+                : nil
+
+            let predicates = Predicates.sectionPredicates(
+                hiddenControlItem: hiddenCI,
+                alwaysHiddenControlItem: alwaysHiddenCI
+            )
+
+            let skip: Set<MenuBarItemInfo> = [.hiddenControlItem, .alwaysHiddenControlItem, .iceIcon]
+
+            let hiddenItems = all.filter { item in
+                item.canBeHidden && !skip.contains(item.info) && predicates.isInHiddenSection(item)
+            }
+            let alwaysHiddenItems = includeAlwaysHidden
+                ? all.filter { item in item.canBeHidden && !skip.contains(item.info) && predicates.isInAlwaysHiddenSection(item) }
+                : []
+
+            self.hiddenSection.hide()
+            if includeAlwaysHidden { self.alwaysHiddenSection.hide() }
+
+            let panel = DropdownPanel(
+                hiddenItems: hiddenItems,
+                alwaysHiddenItems: alwaysHiddenItems,
+                iceIconFrame: iceIconFrame,
+                screen: screen,
+                manager: self,
+                appState: appState
+            )
+            panel.delegate = self
+            self.dropdownPanel = panel
+            self.isPanelOpen = true
+            self.visibleSection.controlItem.updateIcon(isOpen: true)
+            panel.showPanel()
+        }
+    }
+
+    func closePanel() {
+        dropdownPanel?.close()
+        dropdownPanel = nil
+        isPanelOpen = false
+        visibleSection.controlItem.updateIcon(isOpen: false)
+    }
+
+    // MARK: - Item activation
+
+    func activateItem(_ item: MenuBarItem) {
+        closePanel()
+
+        let isAlwaysHidden = alwaysHiddenSection.controlItem.windowFrame
+            .map { item.frame.maxX <= $0.minX } ?? false
+
+        if isAlwaysHidden { alwaysHiddenSection.show() }
+        hiddenSection.show()
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            let liveFrame = MenuBarItem.getMenuBarItems(onScreenOnly: true, activeSpaceOnly: true)
+                .first(where: { $0.info == item.info })?.frame
+            if let frame = liveFrame {
+                self.simulateClick(at: CGPoint(x: frame.midX, y: frame.midY), pid: item.ownerPID)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.hiddenSection.hide()
+                self?.alwaysHiddenSection.hide()
+            }
+        }
+    }
+
+    private func simulateClick(at point: CGPoint, pid: pid_t) {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+        CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)?.postToPid(pid)
+        CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)?.postToPid(pid)
+    }
+
+    // MARK: - Move item between sections
+
+    func moveItem(_ item: MenuBarItem, toAlwaysHidden: Bool) {
+        hiddenSection.show()
+        alwaysHiddenSection.show()
+
+        Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            let all = MenuBarItem.getMenuBarItems(onScreenOnly: true, activeSpaceOnly: true)
+            guard let liveItem = all.first(where: { $0.info == item.info }) else {
+                self.hiddenSection.hide(); self.alwaysHiddenSection.hide(); return
+            }
+            let targetCI = toAlwaysHidden ? self.alwaysHiddenSection.controlItem : self.hiddenSection.controlItem
+            guard let targetFrame = targetCI.windowFrame else {
+                self.hiddenSection.hide(); self.alwaysHiddenSection.hide(); return
+            }
+            let dest = CGPoint(x: targetFrame.minX - 10, y: liveItem.frame.midY)
+            self.simulateDrag(from: CGPoint(x: liveItem.frame.midX, y: liveItem.frame.midY), to: dest, pid: liveItem.ownerPID)
+            try? await Task.sleep(for: .milliseconds(500))
+            self.hiddenSection.hide()
+            self.alwaysHiddenSection.hide()
+        }
+    }
+
+    private func simulateDrag(from start: CGPoint, to end: CGPoint, pid: pid_t) {
+        guard let source = CGEventSource(stateID: .hidSystemState) else { return }
+
+        func post(_ type: CGEventType, at pt: CGPoint) {
+            let e = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: pt, mouseButton: .left)
+            e?.flags = (e?.flags ?? []).union(.maskCommand)
+            e?.postToPid(pid)
+        }
+
+        post(.leftMouseDown, at: start)
+        for i in 1...15 {
+            let t = CGFloat(i) / 15
+            post(.leftMouseDragged, at: CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
+            Thread.sleep(forTimeInterval: 0.016)
+        }
+        post(.leftMouseUp, at: end)
+    }
+
+    // MARK: - Context menu
+
+    private func showContextMenu() {
+        let menu = NSMenu(title: "Hide Menu Bar Apps")
+        let prefsItem = NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
+        prefsItem.keyEquivalentModifierMask = .command
+        prefsItem.target = self
+        menu.addItem(prefsItem)
+        menu.addItem(.separator())
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
+        quitItem.keyEquivalentModifierMask = .command
+        menu.addItem(quitItem)
+
+        visibleSection.controlItem.showMenu(menu)
+    }
+
+    @objc private func openPreferences() {
+        appState?.openPreferences()
+    }
 }
 
-// MARK: - Logger
-private extension Logger {
-    /// Logger to use for the menu bar manager.
-    static let menuBarManager = Logger(category: "MenuBarManager")
+// MARK: - NSWindowDelegate
+
+extension MenuBarManager: NSWindowDelegate {
+    nonisolated func windowWillClose(_ notification: Notification) {
+        Task { @MainActor in
+            if notification.object as? NSPanel === self.dropdownPanel {
+                self.isPanelOpen = false
+                self.visibleSection.controlItem.updateIcon(isOpen: false)
+                self.dropdownPanel = nil
+            }
+        }
+    }
+}
+
+// MARK: - Legacy stubs
+
+extension MenuBarManager {
+    var iceBarPanel: NSPanel { NSPanel() }
+    var isMenuBarHiddenBySystem: Bool { false }
+    var isMenuBarHiddenBySystemUserDefaults: Bool { false }
+    func getApplicationMenuFrame(for display: CGDirectDisplayID) -> CGRect? { nil }
 }
