@@ -15,7 +15,7 @@ final class MenuBarManager: NSObject, ObservableObject {
 
     var sections: [MenuBarSection] { [visibleSection, hiddenSection, alwaysHiddenSection] }
 
-    init() {
+    override init() {
         self.visibleSection = MenuBarSection(name: .visible)
         self.hiddenSection = MenuBarSection(name: .hidden)
         self.alwaysHiddenSection = MenuBarSection(name: .alwaysHidden)
