@@ -1,28 +1,29 @@
-//
-//  SettingsWindow.swift
-//  Ice
-//
-
 import SwiftUI
 
-struct SettingsWindow: Scene {
-    @ObservedObject var appState: AppState
+struct PreferencesView: View {
+    @EnvironmentObject var settingsManager: SettingsManager
 
-    var body: some Scene {
-        Window(Constants.settingsWindowTitle, id: Constants.settingsWindowID) {
-            SettingsView()
-                .readWindow { window in
-                    guard let window else {
-                        return
+    var body: some View {
+        Form {
+            Section {
+                Picker("Display mode", selection: $settingsManager.displayMode) {
+                    ForEach(DisplayMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
                     }
-                    appState.assignSettingsWindow(window)
                 }
-                .frame(minWidth: 825, minHeight: 500)
+                .pickerStyle(.radioGroup)
+            }
+
+            Section {
+                Toggle("Enable Always-Hidden section", isOn: $settingsManager.enableAlwaysHidden)
+            } footer: {
+                Text("When enabled, Cmd+Click on the dot shows a second section for items you want permanently hidden — even from the panel. Useful for reorganizing them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .commandsRemoved()
-        .windowResizability(.contentSize)
-        .defaultSize(width: 900, height: 625)
-        .environmentObject(appState)
-        .environmentObject(appState.navigationState)
+        .formStyle(.grouped)
+        .padding()
+        .frame(width: 380)
     }
 }
