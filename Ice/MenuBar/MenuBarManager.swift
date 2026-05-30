@@ -2,7 +2,7 @@ import Cocoa
 import Combine
 
 @MainActor
-final class MenuBarManager: ObservableObject {
+final class MenuBarManager: NSObject, ObservableObject {
     let visibleSection: MenuBarSection
     let hiddenSection: MenuBarSection
     let alwaysHiddenSection: MenuBarSection
@@ -19,6 +19,7 @@ final class MenuBarManager: ObservableObject {
         self.visibleSection = MenuBarSection(name: .visible)
         self.hiddenSection = MenuBarSection(name: .hidden)
         self.alwaysHiddenSection = MenuBarSection(name: .alwaysHidden)
+        super.init()
     }
 
     func performSetup() {
